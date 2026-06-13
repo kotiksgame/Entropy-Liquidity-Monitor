@@ -15,13 +15,13 @@ import streamlit as st
 
 from engine import (
     REGION_HINT,
+    SOURCES,
     Alert,
     SymbolMetrics,
     demo_csv_bytes,
     get_hub,
     load_demo_csv,
 )
-from exchanges import SOURCES
 
 MIN_VOLUME_MAX = 15_000_000
 MIN_VOLUME_STEP = 50_000
