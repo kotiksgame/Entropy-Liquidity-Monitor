@@ -13,19 +13,202 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Literal, Optional, Tuple
 
-from exchanges import (
-    REGION_HINT,
-    SOURCES,
-    SourceConfig,
-    fetch_depth_rest,
-    fetch_symbols,
-    is_access_error,
-)
+import requests
 
-__all__ = ["REGION_HINT", "get_hub", "load_demo_csv", "demo_csv_bytes", "SymbolMetrics", "Alert"]
+__all__ = [
+    "REGION_HINT", "SOURCES", "SourceConfig", "get_hub", "load_demo_csv",
+    "demo_csv_bytes", "SymbolMetrics", "Alert",
+]
 
 MarketType = Literal["spot", "futures"]
 DataMode = Literal["websocket", "rest", "demo", "offline"]
+
+REGION_HINT = "Binance is restricted in your region. Please use a local version or a VPN"
+
+STABLE_BASES = {
+    "USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD", "PYUSD", "USDE", "USD1",
+}
+
+
+@dataclass(frozen=True)
+class SourceConfig:
+    source_id: str
+    exchange: str
+    market: str
+    label: str
+    rest_base: str
+    ws_url: str
+    depth_limit: int = 20
+
+
+SOURCES: Dict[str, SourceConfig] = {
+    "binance_spot": SourceConfig(
+        "binance_spot", "binance", "spot", "Binance Spot",
+        "https://api.binance.com", "wss://stream.binance.com:9443/stream",
+    ),
+    "binance_futures": SourceConfig(
+        "binance_futures", "binance", "futures", "Binance Futures",
+        "https://fapi.binance.com", "wss://fstream.binance.com/stream",
+    ),
+    "okx_swap": SourceConfig(
+        "okx_swap", "okx", "futures", "OKX Swap",
+        "https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/public",
+    ),
+    "okx_spot": SourceConfig(
+        "okx_spot", "okx", "spot", "OKX Spot",
+        "https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/public",
+    ),
+    "bybit_linear": SourceConfig(
+        "bybit_linear", "bybit", "futures", "Bybit Linear",
+        "https://api.bybit.com", "wss://stream.bybit.com/v5/public/linear",
+    ),
+    "bybit_spot": SourceConfig(
+        "bybit_spot", "bybit", "spot", "Bybit Spot",
+        "https://api.bybit.com", "wss://stream.bybit.com/v5/public/spot",
+    ),
+}
+
+
+def is_access_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "403", "451", "restricted", "banned", "forbidden",
+        "cloudfront", "waf", "geographic", "invalid json",
+        "connection", "timeout", "name or service not known",
+    )
+    return any(m in text for m in markers)
+
+
+def _fetch_json(url: str, context: str) -> Any:
+    resp = requests.get(url, timeout=20)
+    if resp.status_code in (403, 451):
+        raise RuntimeError(f"{REGION_HINT} ({context}: HTTP {resp.status_code})")
+    if resp.status_code != 200:
+        raise RuntimeError(f"{context}: HTTP {resp.status_code} — {resp.text[:200]}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"{REGION_HINT} ({context}: invalid JSON)") from exc
+    return data
+
+
+def _binance_symbols(cfg: SourceConfig, min_volume: float) -> List[Tuple[str, str]]:
+    ep = "/api/v3/exchangeInfo" if cfg.market == "spot" else "/fapi/v1/exchangeInfo"
+    tk = "/api/v3/ticker/24hr" if cfg.market == "spot" else "/fapi/v1/ticker/24hr"
+    info = _fetch_json(f"{cfg.rest_base}{ep}", cfg.label)
+    if not isinstance(info, dict) or "symbols" not in info:
+        raise RuntimeError(f"{cfg.label}: unexpected exchangeInfo")
+    raw_tickers = _fetch_json(f"{cfg.rest_base}{tk}", cfg.label)
+    if not isinstance(raw_tickers, list):
+        raise RuntimeError(f"{cfg.label}: unexpected ticker response")
+    tickers = {t["symbol"]: float(t.get("quoteVolume", 0)) for t in raw_tickers if isinstance(t, dict)}
+    pairs: List[Tuple[str, str]] = []
+    for item in info["symbols"]:
+        if item.get("status") != "TRADING" or item.get("quoteAsset") != "USDT":
+            continue
+        if cfg.market == "spot":
+            if not item.get("isSpotTradingAllowed", True):
+                continue
+        elif item.get("contractType") != "PERPETUAL":
+            continue
+        base = item["baseAsset"]
+        if base in STABLE_BASES:
+            continue
+        sym = item["symbol"]
+        if tickers.get(sym, 0) < min_volume:
+            continue
+        pairs.append((sym, base))
+    pairs.sort(key=lambda x: tickers.get(x[0], 0), reverse=True)
+    return pairs
+
+
+def _okx_symbols(cfg: SourceConfig, min_volume: float) -> List[Tuple[str, str]]:
+    inst = "SWAP" if cfg.market == "futures" else "SPOT"
+    data = _fetch_json(f"{cfg.rest_base}/api/v5/public/instruments?instType={inst}", cfg.label)
+    tick = _fetch_json(f"{cfg.rest_base}/api/v5/market/tickers?instType={inst}", cfg.label)
+    if data.get("code") != "0" or tick.get("code") != "0":
+        raise RuntimeError(f"{cfg.label}: {data.get('msg') or tick.get('msg')}")
+    volumes = {
+        row.get("instId", ""): float(row.get("volCcy24h") or row.get("vol24h") or 0)
+        for row in tick.get("data", [])
+    }
+    pairs: List[Tuple[str, str]] = []
+    for item in data.get("data", []):
+        if item.get("state") != "live":
+            continue
+        inst_id = item["instId"]
+        if not inst_id.endswith("-USDT") and not inst_id.endswith("-USDT-SWAP"):
+            continue
+        base = inst_id.split("-")[0]
+        if base in STABLE_BASES or volumes.get(inst_id, 0) < min_volume:
+            continue
+        pairs.append((inst_id, base))
+    pairs.sort(key=lambda x: volumes.get(x[0], 0), reverse=True)
+    return pairs
+
+
+def _bybit_symbols(cfg: SourceConfig, min_volume: float) -> List[Tuple[str, str]]:
+    category = "linear" if cfg.market == "futures" else "spot"
+    info = _fetch_json(f"{cfg.rest_base}/v5/market/instruments-info?category={category}", cfg.label)
+    tick = _fetch_json(f"{cfg.rest_base}/v5/market/tickers?category={category}", cfg.label)
+    if info.get("retCode") != 0 or tick.get("retCode") != 0:
+        raise RuntimeError(f"{cfg.label}: API error")
+    volumes = {
+        row["symbol"]: float(row.get("turnover24h") or row.get("volume24h") or 0)
+        for row in tick.get("result", {}).get("list", [])
+    }
+    pairs: List[Tuple[str, str]] = []
+    for item in info.get("result", {}).get("list", []):
+        if item.get("status") != "Trading":
+            continue
+        sym = item["symbol"]
+        if not sym.endswith("USDT"):
+            continue
+        base = sym.replace("USDT", "")
+        if base in STABLE_BASES or volumes.get(sym, 0) < min_volume:
+            continue
+        pairs.append((sym, base))
+    pairs.sort(key=lambda x: volumes.get(x[0], 0), reverse=True)
+    return pairs
+
+
+def fetch_symbols(source_id: str, min_volume: float = 0.0) -> List[Tuple[str, str]]:
+    cfg = SOURCES[source_id]
+    if cfg.exchange == "binance":
+        return _binance_symbols(cfg, min_volume)
+    if cfg.exchange == "okx":
+        return _okx_symbols(cfg, min_volume)
+    if cfg.exchange == "bybit":
+        return _bybit_symbols(cfg, min_volume)
+    raise RuntimeError(f"Unknown exchange: {cfg.exchange}")
+
+
+def fetch_depth_rest(source_id: str, symbol: str) -> Tuple[List, List]:
+    cfg = SOURCES[source_id]
+    if cfg.exchange == "binance":
+        path = "/api/v3/depth" if cfg.market == "spot" else "/fapi/v1/depth"
+        data = _fetch_json(f"{cfg.rest_base}{path}?symbol={symbol}&limit={cfg.depth_limit}", f"{cfg.label} depth")
+        return data.get("bids", []), data.get("asks", [])
+    if cfg.exchange == "okx":
+        data = _fetch_json(
+            f"{cfg.rest_base}/api/v5/market/books?instId={symbol}&sz={cfg.depth_limit}",
+            f"{cfg.label} depth",
+        )
+        if data.get("code") != "0" or not data.get("data"):
+            raise RuntimeError(f"{cfg.label} depth: {data.get('msg')}")
+        book = data["data"][0]
+        return book.get("bids", []), book.get("asks", [])
+    if cfg.exchange == "bybit":
+        category = "linear" if cfg.market == "futures" else "spot"
+        data = _fetch_json(
+            f"{cfg.rest_base}/v5/market/orderbook?category={category}&symbol={symbol}&limit={cfg.depth_limit}",
+            f"{cfg.label} depth",
+        )
+        if data.get("retCode") != 0:
+            raise RuntimeError(f"{cfg.label} depth: {data.get('retMsg')}")
+        result = data.get("result", {})
+        return result.get("b", []), result.get("a", [])
+    raise RuntimeError(f"Unknown exchange: {cfg.exchange}")
 
 DEPTH_LEVELS = 20
 SUBSCRIBE_BATCH = 180
