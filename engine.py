@@ -173,13 +173,34 @@ class AlertManager:
         return alerts
 
 
+def _fetch_json(url: str, context: str) -> Any:
+    resp = requests.get(url, timeout=20)
+    if resp.status_code != 200:
+        raise RuntimeError(f"{context}: HTTP {resp.status_code} — {resp.text[:200]}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"{context}: invalid JSON — {resp.text[:200]}") from exc
+    if isinstance(data, dict) and "code" in data:
+        raise RuntimeError(f"{context}: {data.get('msg', data)}")
+    return data
+
+
 def fetch_usdt_symbols(market: MarketType, min_quote_volume: float = 0.0) -> List[Tuple[str, str]]:
     """Return (symbol, base_asset) for active USDT pairs on spot or futures."""
     cfg = MARKET_CONFIG[market]
-    info = requests.get(f"{cfg['rest']}{cfg['exchange_info']}", timeout=20).json()
+    info = _fetch_json(f"{cfg['rest']}{cfg['exchange_info']}", f"{market} exchangeInfo")
+    if not isinstance(info, dict) or "symbols" not in info:
+        raise RuntimeError(f"{market} exchangeInfo: unexpected response")
+
+    raw_tickers = _fetch_json(f"{cfg['rest']}{cfg['ticker']}", f"{market} ticker/24hr")
+    if not isinstance(raw_tickers, list):
+        raise RuntimeError(f"{market} ticker/24hr: expected list, got {type(raw_tickers).__name__}")
+
     tickers = {
         t["symbol"]: float(t.get("quoteVolume", 0))
-        for t in requests.get(f"{cfg['rest']}{cfg['ticker']}", timeout=20).json()
+        for t in raw_tickers
+        if isinstance(t, dict) and "symbol" in t
     }
 
     pairs: List[Tuple[str, str]] = []
