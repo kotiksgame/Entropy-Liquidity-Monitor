@@ -64,3 +64,10 @@ streamlit run app.py --server.port 8501
 
 # Run (EN)
 streamlit run app_en.py --server.port 8502
+
+
+https://github.com/kotiksgame/Entropy-Liquidity-Monitor/blob/main/assets/en-screenshot1.jpg
+
+https://github.com/kotiksgame/Entropy-Liquidity-Monitor/blob/main/assets/en-screenshot2.jpg
+
+https://github.com/kotiksgame/Entropy-Liquidity-Monitor/blob/main/assets/en-screenshot3.jpg
