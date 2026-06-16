@@ -29,14 +29,14 @@ MIN_VOLUME_STEP = 50_000
 TEXTS: Dict[str, Dict[str, Any]] = {
     "ru": {
         "page_title": "Crypto Entropy Analyzer",
-        "subtitle": "Binance · OKX · Bybit · дисбаланс ликвидности, энтропия стакана и алерты",
+        "subtitle": "OKX · Binance · Bybit · дисбаланс ликвидности, энтропия стакана и алерты",
         "sidebar_exchange": "Биржи",
         "exchange_preset": "Пресет",
         "presets": {
+            "okx_both": "OKX Spot + Swap",
             "binance_both": "Binance Spot + Futures",
             "binance_spot": "Binance Spot",
             "binance_futures": "Binance Futures",
-            "okx_both": "OKX Spot + Swap",
             "bybit_both": "Bybit Spot + Linear",
             "all": "Все биржи",
         },
@@ -106,14 +106,14 @@ TEXTS: Dict[str, Dict[str, Any]] = {
     },
     "en": {
         "page_title": "Crypto Entropy Analyzer",
-        "subtitle": "Binance · OKX · Bybit · liquidity imbalance, order book entropy & alerts",
+        "subtitle": "OKX · Binance · Bybit · liquidity imbalance, order book entropy & alerts",
         "sidebar_exchange": "Exchanges",
         "exchange_preset": "Preset",
         "presets": {
+            "okx_both": "OKX Spot + Swap",
             "binance_both": "Binance Spot + Futures",
             "binance_spot": "Binance Spot",
             "binance_futures": "Binance Futures",
-            "okx_both": "OKX Spot + Swap",
             "bybit_both": "Bybit Spot + Linear",
             "all": "All exchanges",
         },
