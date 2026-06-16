@@ -727,17 +727,17 @@ _HUBS: Dict[str, MarketHub] = {}
 _HUB_LOCK = threading.Lock()
 
 SOURCE_PRESETS: Dict[str, Tuple[str, ...]] = {
+    "okx_both": ("okx_spot", "okx_swap"),
     "binance_both": ("binance_spot", "binance_futures"),
     "binance_spot": ("binance_spot",),
     "binance_futures": ("binance_futures",),
-    "okx_both": ("okx_spot", "okx_swap"),
     "bybit_both": ("bybit_spot", "bybit_linear"),
-    "all": ("binance_spot", "binance_futures", "okx_swap", "bybit_linear"),
+    "all": ("okx_spot", "okx_swap", "binance_spot", "binance_futures", "bybit_linear"),
 }
 
 
-def get_hub(preset: str = "binance_both", min_quote_volume: float = 100_000.0) -> MarketHub:
-    sources = SOURCE_PRESETS.get(preset, SOURCE_PRESETS["binance_both"])
+def get_hub(preset: str = "okx_both", min_quote_volume: float = 100_000.0) -> MarketHub:
+    sources = SOURCE_PRESETS.get(preset, SOURCE_PRESETS["okx_both"])
     key = f"{preset}:{min_quote_volume}"
     with _HUB_LOCK:
         if key not in _HUBS:
